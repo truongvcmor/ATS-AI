@@ -78,6 +78,14 @@ List/search query params (both `GET /candidates` and `GET /search/candidates` ac
 |---|---|---|
 | GET | `/dashboard` | KPIs + candidates-over-time, by-source, top-skills, top-locations, pipeline-by-stage, AI-score-distribution |
 
+## Settings (Admin only)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/settings/ai` | Effective AI provider config — resolved values, masked key previews (`****abcd`), and whether each came from the database or `.env` |
+| PUT | `/settings/ai` | Partial update — omit a field to leave it untouched; send `openai_api_keys`/`gemini_api_keys` as `""` to clear the override and revert to `.env`. Applies immediately, no restart. |
+| POST | `/settings/ai/test` | `{provider, api_key?, model?}` — makes one real minimal completion call to verify a key works before saving it; returns `{ok, message, latency_ms}` |
+
 ## Response shape examples
 
 ```jsonc

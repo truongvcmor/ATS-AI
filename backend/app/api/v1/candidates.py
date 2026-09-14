@@ -27,7 +27,7 @@ from app.services.candidate.candidate_service import (
 from app.services.candidate.mappers import to_detail, to_list_item
 from app.services.candidate.merge_service import merge_candidates
 from app.services.search.service import SearchService
-from app.utils.file_storage import save_upload, validate_cv_file
+from app.utils.file_storage import save_upload, validate_cv_file, validate_file_content
 from app.workers.cv_processing import process_cv_upload
 
 router = APIRouter(prefix="/candidates", tags=["candidates"])
@@ -44,6 +44,7 @@ def upload_cvs(
     for file in files:
         ext = validate_cv_file(file)
         file_bytes = file.file.read()
+        validate_file_content(file_bytes, ext)
         file_path = save_upload(file_bytes, file.filename or "cv", ext)
         job = ProcessingJob(
             file_name=file.filename or "cv",

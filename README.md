@@ -124,8 +124,10 @@ All in `backend/.env` (see `backend/.env.example`):
 
 | Variable | Purpose | Default |
 |---|---|---|
+| `ENVIRONMENT` | `development` \| `production` — gates the HSTS header and the JWT_SECRET check | `development` |
 | `DATABASE_URL` | SQLAlchemy Postgres URL | `postgresql+psycopg2://ats:ats@localhost:5433/ats` |
-| `JWT_SECRET` | HMAC secret for access tokens | dev placeholder — change for anything real |
+| `JWT_SECRET` | HMAC secret for access tokens | dev placeholder — **must** change in production |
+| `ENCRYPTION_KEY` | encrypts AI provider keys saved via the Settings UI at rest | derived from `JWT_SECRET` if unset — set a dedicated one in production |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | JWT lifetime | 1440 |
 | `LLM_PROVIDER` / `EMBEDDING_PROVIDER` | `mock` \| `openai` \| `gemini` \| `auto` | `mock` |
 | `OPENAI_API_KEY` / `OPENAI_API_KEYS` / `OPENAI_MODEL` | single key / comma-separated multiple keys / model | empty / empty / `gpt-4o-mini` |
@@ -178,6 +180,10 @@ Set `LLM_PROVIDER=auto` (or `openai`/`gemini` to pin to one) and supply one or m
 
 This is implemented once in `app/services/ai_common/key_pool.py` (`KeyPool`) and reused by both `RotatingLLMService` and `RotatingEmbeddingService` — see [ARCHITECTURE.md](ARCHITECTURE.md) for how it plugs into the existing provider abstraction. Embeddings intentionally do **not** mix providers within one pool (OpenAI and Gemini produce different vector dimensions, which would corrupt the single pgvector column) — `EMBEDDING_PROVIDER=auto` there just auto-selects whichever single provider has keys configured, still rotating across multiple keys of that provider.
 
+### Switching providers from the UI (no restart needed)
+
+All of the above can also be configured live from **Settings → AI providers** in the app (Admin role only) instead of editing `.env` and restarting: pick the LLM/embedding/OCR provider, paste in one or more API keys, hit **Test connection** to verify a key actually works before saving, and **Save** — it takes effect on the very next request. Settings saved this way are stored in Postgres (`system_settings` table) with API keys encrypted at rest (`ENCRYPTION_KEY`/`JWT_SECRET`-derived, see `app/core/crypto.py`) and take priority over `.env`; leaving a field blank falls back to `.env`. See `app/core/runtime_config.py` for how this hot-swapping works.
+
 ## Scanned CV / OCR support
 
 Image files (`.png`, `.jpg`/`.jpeg`) and scanned PDFs (a PDF with no real text layer — pypdf extracts under `OCR_MIN_TEXT_LENGTH` characters) are automatically routed through OCR before parsing, so a candidate can upload a phone photo or a flatbed scan of a paper CV just like a normal PDF/DOCX. Each `CandidateCV` record's `extraction_method` field (`text` or `ocr`) reports which path was used.
@@ -190,15 +196,40 @@ Image files (`.png`, `.jpg`/`.jpeg`) and scanned PDFs (a PDF with no real text l
 
 A scanned PDF's pages are rasterized with `pdf2image`/Poppler (capped at `OCR_MAX_PAGES` pages) before each page image is OCR'd the same way as a standalone image upload.
 
+## Production deployment
+
+The MVP is designed to run as-is via Docker Compose on a single host. Beyond `docker compose up --build`, treat the following as required before exposing it beyond your own machine:
+
+**Secrets**
+- Set a strong, unique `JWT_SECRET` in `backend/.env` — the app logs a warning at startup if it's still the dev placeholder while `ENVIRONMENT=production`. Every login token is forgeable if this leaks or stays default.
+- Set a dedicated `ENCRYPTION_KEY` (any long random string) — it encrypts AI provider API keys saved via the Settings UI before they hit Postgres. Without it, the app derives one from `JWT_SECRET`, which works but means rotating `JWT_SECRET` later also breaks decryption of already-stored keys.
+- Set `ENVIRONMENT=production` — this enables the `Strict-Transport-Security` response header and the `JWT_SECRET` check above.
+- `backend/.env` and the root `.env` (LAN_HOST) are gitignored; never commit real secrets.
+
+**Network**
+- Put a reverse proxy in front (nginx, Caddy, Traefik) to terminate TLS — this app serves plain HTTP on 8080/5173 and does not handle certificates itself. Point the proxy at the backend (`:8080`) and frontend (`:5173`) containers.
+- Tighten `CORS_ORIGINS` to your real domain(s) only — the shipped default includes `localhost`/LAN-sharing origins for local dev, which you don't want on a public deployment.
+- The Postgres port (`5433:5432` in `docker-compose.yml`) only needs to be host-exposed for local `alembic`/psql access during development; remove that port mapping (keep the internal Docker network access other services use) once you don't need it from the host.
+
+**Containers** (already built in)
+- Both `backend` and `frontend` images are multi-stage builds that run as a non-root user (`app`/`node`), not root. The backend's entrypoint (`docker-entrypoint.sh`) briefly starts as root only to fix `/app/uploads` ownership on an existing volume, then drops to the `app` user via `gosu` before the actual server process starts.
+- Both containers have a Docker `HEALTHCHECK` (`/health` for the backend — it also pings Postgres — and the root page for the frontend); `docker-compose.yml` uses these via `depends_on: condition: service_healthy` so the frontend doesn't start serving until the backend is actually ready.
+- JSON file logging is capped (`max-size: 10m`, `max-file: 3` per container) so logs can't fill the disk unbounded.
+- File uploads are checked against their real magic bytes, not just the filename extension, before being handed to pypdf/python-docx/PIL/Tesseract (`app/utils/file_storage.validate_file_content`).
+- Security headers (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Strict-Transport-Security` in prod) are added to every response.
+
+**Scaling constraint — read before adding `--workers`**
+The backend intentionally runs a single Uvicorn worker (see the comment in `docker-compose.yml`). Two pieces of state live in that one process's memory: the admin Settings UI's hot-swappable AI config (`app/core/runtime_config.py`) and the in-process `KeyPool` cooldown tracking. CV processing also runs via FastAPI `BackgroundTasks` in this same process rather than a separate worker. Adding `--workers N` or running multiple backend replicas would give each process its own stale copy of both — don't do it without first moving that state to a shared store (Redis is the natural choice) and CV processing to a real task queue (Celery). This is the main structural thing standing between this MVP and horizontal scaling.
+
 ## Known limitations
 
-- No Celery/Redis — CV processing runs via FastAPI `BackgroundTasks`, which is fine at MVP scale but not horizontally scalable across multiple backend replicas.
-- Vector search uses pgvector with a default 384-dim mock embedding; switching to a real embedding provider (OpenAI=1536 dims, Gemini=768 dims) requires a migration to resize the `embeddings.vector` column to match (`EMBEDDING_DIM` must equal the provider's actual output size).
+- See "Scaling constraint" above — single backend process by design; horizontal scaling needs Redis + Celery first.
+- Vector search uses pgvector with a default 384-dim mock embedding; switching to a real embedding provider (OpenAI=1536 dims, Gemini=768 dims) requires a migration to resize the `embeddings.vector` column to match (`EMBEDDING_DIM` must equal the provider's actual output size) — the Settings UI shows a warning banner when this would be mismatched.
 - Keyword/boolean search filters candidates in Python after a bounded SQL prefetch rather than pushing full-text search into Postgres/Elasticsearch — fine for thousands of candidates, not millions.
 - CV files are stored on local disk (a Docker volume), not S3/object storage.
 - No audit log / data retention / consent tracking yet (the data model and merge-never-deletes behavior make these straightforward to add later).
-- The rule-based CV parser is heuristic — it works well on reasonably-formatted English/Vietnamese resumes with recognizable section headers, and handles the PDF-specific quirks of pypdf text extraction (missing blank lines, mid-line wraps). It does **not** reliably parse fundamentally different layouts — multi-column skill-matrix tables, or documents in a language it doesn't have section-header aliases for (currently English + Vietnamese, with light Japanese support: it recognizes a handful of common Japanese section headers and a "romanized name in parentheses" pattern typical of Japan-market skill-sheets, but not full-document parsing). For any CV whose structure it can't confidently recognize, configure a real `LLM_PROVIDER` (OpenAI or Gemini) — `LLMCVParser` understands arbitrary layouts and languages far better than regex heuristics ever will, and is the recommended fix if you're seeing consistently poor extraction on a particular CV format/language.
-- Key rotation state (cooldowns) is in-process memory — it resets on restart and isn't shared across multiple backend replicas; fine for a single instance, would need a shared store (e.g. Redis) to coordinate cooldowns across replicas.
+- No TLS termination built in — put a reverse proxy in front for real deployments (see "Production deployment" above).
+- The rule-based CV parser is heuristic — it works well on reasonably-formatted English/Vietnamese resumes with recognizable section headers, and handles the PDF-specific quirks of pypdf text extraction (missing blank lines, mid-line wraps, wrapped parentheticals) and common bullet-glyph variants. It does **not** reliably parse fundamentally different layouts — multi-column skill-matrix tables, or documents in a language it doesn't have section-header aliases for (currently English + Vietnamese, with light Japanese support: it recognizes a handful of common Japanese section headers and a "romanized name in parentheses" pattern typical of Japan-market skill-sheets, but not full-document parsing). For any CV whose structure it can't confidently recognize, configure a real `LLM_PROVIDER` (OpenAI or Gemini, from the Settings page or `.env`) — `LLMCVParser` understands arbitrary layouts and languages far better than regex heuristics ever will, and is the recommended fix if you're seeing consistently poor extraction on a particular CV format/language.
 - Tesseract OCR accuracy is decent but not perfect on low-quality photos (e.g. it occasionally confuses `I`/`l`); the `llm_vision` fallback is meaningfully more accurate when a real key is configured.
 
 ## Recommended next steps

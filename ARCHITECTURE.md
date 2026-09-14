@@ -45,11 +45,12 @@ Strict `Router → Service → Repository/ORM → DB`. Routers (`app/api/v1/*.py
 
 ```
 backend/app/
-  main.py                 FastAPI app, CORS, global exception handlers
-  core/                    config (pydantic-settings), security (JWT/bcrypt), deps (auth/RBAC), logging, database (engine/session)
-  models/                  SQLAlchemy ORM, one module per aggregate
+  main.py                 FastAPI app, CORS, security headers, startup hook, global exception handlers
+  core/                    config (pydantic-settings), runtime_config (hot-swappable AI config), crypto (secrets
+                            encryption), security (JWT/bcrypt), rate_limit, deps (auth/RBAC), logging, database
+  models/                  SQLAlchemy ORM, one module per aggregate (incl. system_settings.py)
   schemas/                 Pydantic request/response models
-  api/v1/                  routers: auth, candidates, jobs, applications, labels, search, dashboard
+  api/v1/                  routers: auth, candidates, jobs, applications, labels, search, dashboard, settings
   services/
     ai_common/              key_pool.py: provider-agnostic KeyPool (round-robin + cooldown-on-failure),
                             shared by the LLM and embedding rotating services
@@ -58,6 +59,7 @@ backend/app/
     embedding/              EmbeddingService ABC → MockEmbeddingService, OpenAIEmbeddingService, GeminiEmbeddingService,
                             RotatingEmbeddingService; factory.py
     ocr/                    OCRService ABC → TesseractOCRService, LLMVisionOCRService, HybridOCRService; factory.py
+    settings/                settings_service.py: admin-editable AI config (DB row ↔ core/runtime_config), key testing
     screening/              screening_service.py: prompt → LLMService → Pydantic-validated JSON, retried on failure
     search/                 KeywordSearch (boolean DSL), SemanticSearch (pgvector cosine), HybridSearch (weighted combine), service.py facade
     candidate/              candidate_service (CRUD/activity log), duplicate_detection, merge_service, mappers (ORM → API schema)
@@ -65,7 +67,7 @@ backend/app/
     dashboard/              KPI + analytics aggregation
   workers/cv_processing.py  the async upload → parse → normalize → dedupe → embed → index pipeline
   prompts/                  all LLM prompt templates (never inline in routes/services)
-  utils/                    file storage, text normalization
+  utils/                    file storage (incl. magic-byte content validation), text normalization
   seed.py / seed_data.py    demo data generator
 alembic/                   migrations
 tests/                     pytest suite
@@ -116,7 +118,15 @@ Both are one-method interfaces (`complete(system, user) -> str`, `embed(text) ->
 
 `app/services/ai_common/key_pool.py` defines `ProviderKey` (provider name + api key + model) and `KeyPool`, a small round-robin-with-cooldown pool: `acquire_order()` returns every key once, healthy keys first, cooling-down keys last; `mark_failure`/`mark_success` manage the cooldown. It knows nothing about HTTP or any specific provider — it's pure bookkeeping, which is what makes it independently unit-testable (`tests/test_key_pool.py`) without any network mocking.
 
-`RotatingLLMService` and `RotatingEmbeddingService` (in `llm/rotating_service.py` / `embedding/rotating_service.py`) wrap a `KeyPool`: each call walks `acquire_order()`, builds the concrete provider service for that key (`OpenAILLMService`/`GeminiLLMService`/etc.), and on any exception marks that key failed and moves to the next — which, when the pool spans providers, means a request can transparently fail over from OpenAI to Gemini mid-call. `llm/factory.get_llm_service()` builds the pool from `settings.openai_keys()` + `settings.gemini_keys()` (both merge a single `*_API_KEY` and a comma-separated `*_API_KEYS` into one list) filtered by `LLM_PROVIDER` (`"auto"` includes both providers; `"openai"`/`"gemini"` pins to one; `"mock"` skips the pool entirely). Embeddings deliberately do **not** allow a pool to mix providers — OpenAI (1536-dim) and Gemini (768-dim) vectors can't share one pgvector column — so `embedding/factory.get_embedding_service()`'s `"auto"` just picks one provider (preferring OpenAI) and rotates only within it; it also logs a warning if the resolved service's `dimensions` don't match `settings.EMBEDDING_DIM`.
+`RotatingLLMService` and `RotatingEmbeddingService` (in `llm/rotating_service.py` / `embedding/rotating_service.py`) wrap a `KeyPool`: each call walks `acquire_order()`, builds the concrete provider service for that key (`OpenAILLMService`/`GeminiLLMService`/etc.), and on any exception marks that key failed and moves to the next — which, when the pool spans providers, means a request can transparently fail over from OpenAI to Gemini mid-call. `llm/factory.get_llm_service()` builds the pool from the *effective* config (`core/runtime_config.get_ai_config()` — see below), filtered by `LLM_PROVIDER` (`"auto"` includes both providers; `"openai"`/`"gemini"` pins to one; `"mock"` skips the pool entirely). Embeddings deliberately do **not** allow a pool to mix providers — OpenAI (1536-dim) and Gemini (768-dim) vectors can't share one pgvector column — so `embedding/factory.get_embedding_service()`'s `"auto"` just picks one provider (preferring OpenAI) and rotates only within it; it also logs a warning if the resolved service's `dimensions` don't match `settings.EMBEDDING_DIM`.
+
+### Admin-configurable settings (hot-swap, no restart)
+
+`app/core/config.Settings` (loaded once from `.env`/env vars at process start, immutable in practice) is the *default* AI configuration. Sitting in front of it, `app/core/runtime_config.py` holds a small in-process `AIConfig` — llm/embedding/ocr provider choice, keys, models — that every factory (`llm/factory.py`, `embedding/factory.py`, `ocr/factory.py`, `cv_parser/factory.py`) reads via `get_ai_config()` instead of touching `Settings` directly. `apply_db_overrides(row)` recomputes that `AIConfig` from `Settings` merged with a `SystemSettings` DB row (any field left `NULL` in the row falls back to the env value) and clears the `@lru_cache` on all four factories, so the very next call rebuilds with the new provider/keys.
+
+This is what makes **Settings → AI providers** in the frontend (Admin only; `api/v1/settings.py`, `services/settings/settings_service.py`) apply instantly with no container restart: `PUT /api/settings/ai` writes the row and calls `apply_db_overrides` in the same request. `apply_db_overrides(None)` (no row) is also called once at app startup (`main.py`'s startup event) to establish the baseline from `.env` alone. API keys are encrypted before being stored (`app/core/crypto.py`, Fernet, key derived from `ENCRYPTION_KEY`/`JWT_SECRET`) and the API only ever returns a masked preview (`****abcd`) — never the plaintext — see `mask_secret`/`AISettingsOut`. A `POST /api/settings/ai/test` endpoint makes one real minimal completion call so an admin can verify a key works *before* saving it.
+
+This whole mechanism is single-process by design (see README's "Scaling constraint") — it's plain in-memory state, deliberately not a distributed cache, because CV processing (`BackgroundTasks`) already runs in this same process.
 
 ### OCR (scanned CV support)
 
@@ -152,8 +162,12 @@ Filters (skills/location/labels/experience/AI score) are pushed down into SQL; t
 ## Security
 
 - JWT bearer auth (`python-jose`), bcrypt password hashing (`passlib`).
-- RBAC via a FastAPI dependency (`core/deps.require_role`): `RecruiterOrAdmin` gates job/candidate/label mutations, CV upload, merge, and pipeline changes; any authenticated role (including `HIRING_MANAGER`) can view candidates/jobs/dashboard and add assessments, matching the spec's role matrix.
-- File upload validation: extension allowlist (`.pdf`, `.docx`) and a max size check before anything touches disk.
+- RBAC via a FastAPI dependency (`core/deps.require_role`): `RecruiterOrAdmin` gates job/candidate/label mutations, CV upload, merge, and pipeline changes; `AdminOnly` additionally gates the AI Settings endpoints; any authenticated role (including `HIRING_MANAGER`) can view candidates/jobs/dashboard and add assessments, matching the spec's role matrix.
+- File upload validation: extension allowlist (`.pdf`/`.docx`/`.png`/`.jpg`), a max size check, and a magic-byte check (`utils/file_storage.validate_file_content`) confirming the actual content matches the claimed extension before it ever reaches pypdf/python-docx/PIL — all before anything touches disk.
+- AI provider API keys saved via the Settings UI are encrypted at rest (`core/crypto.py`, Fernet) and only ever returned to clients as a masked preview.
+- Login is rate-limited per IP (`core/rate_limit.py`); a global security-headers middleware (`main.py`) adds `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and (in production) `Strict-Transport-Security` to every response.
+- `GET /health` checks live Postgres connectivity (not just process liveness) and returns 503 when the DB is unreachable, for use with container/orchestrator health probes.
+- Containers run as non-root (see README's "Production deployment"); a startup check warns loudly if `JWT_SECRET` is still the dev placeholder while `ENVIRONMENT=production`.
 - Structured logging with `exc_info=True` on all unexpected errors; a global FastAPI exception handler prevents raw tracebacks from leaking to clients.
 
 ## Frontend architecture
