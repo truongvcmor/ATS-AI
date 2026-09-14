@@ -1,0 +1,75 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: ats-postgres
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ats
+      POSTGRES_PASSWORD: ats
+      POSTGRES_DB: ats
+    ports:
+      - "5433:5432"
+    volumes:
+      - ats_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ats -d ats"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: ats-backend
+    restart: unless-stopped
+    logging: *default-logging
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+psycopg2://ats:ats@postgres:5432/ats
+      # Extra allowed origins for LAN sharing (see root .env.example / LAN_HOST).
+      # No-op when LAN_HOST is unset — these just dedupe against the localhost
+      # ones already in Settings.CORS_ORIGINS.
+      CORS_ORIGINS: '["http://localhost:5173","http://127.0.0.1:5173","http://${LAN_HOST:-localhost}:5173","http://${LAN_HOST:-localhost}.nip.io:5173"]'
+    ports:
+      - "8080:8000"
+    volumes:
+      - ats_uploads:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Single worker process by design: the admin Settings UI's hot-swappable
+    # AI config (app/core/runtime_config.py) and CV BackgroundTasks both live
+    # in this one process's memory. Running `--workers > 1` here would give
+    # each worker its own stale copy of the config until restarted — don't
+    # add it without also moving that state to a shared store (e.g. Redis).
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: ats-frontend
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      # Points the browser bundle at the backend. Set LAN_HOST (repo-root
+      # .env, see .env.example) to your machine's LAN IP to make this work
+      # from other devices; defaults to localhost for normal local dev.
+      VITE_API_URL: http://${LAN_HOST:-localhost}:8080/api
+    ports:
+      - "5173:5173"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  ats_postgres_data:
+  ats_uploads:
