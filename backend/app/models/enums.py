@@ -55,3 +55,33 @@ class AssessmentRecommendation(str, enum.Enum):
 class DuplicateAction(str, enum.Enum):
     MERGED = "MERGED"
     KEPT_SEPARATE = "KEPT_SEPARATE"
+
+
+class SeniorityLevel(str, enum.Enum):
+    """Shared between Job.level (level being hired for) and
+    Candidate.current_level (candidate's current level) so the two can be
+    compared directly during screening."""
+
+    INTERN = "INTERN"
+    FRESHER = "FRESHER"
+    JUNIOR = "JUNIOR"
+    MID = "MID"
+    SENIOR = "SENIOR"
+    LEAD = "LEAD"
+    MANAGER = "MANAGER"
+    DIRECTOR = "DIRECTOR"
+
+
+class SalaryCurrency(str, enum.Enum):
+    VND = "VND"
+    USD = "USD"
+
+
+class GenderRequirement(str, enum.Enum):
+    """Informational metadata for a job posting only — NEVER read by the
+    screening/recommendation services. Candidates are ranked strictly on
+    job-related qualifications; see app/prompts/screening.py."""
+
+    ANY = "ANY"
+    MALE = "MALE"
+    FEMALE = "FEMALE"

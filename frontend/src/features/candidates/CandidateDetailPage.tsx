@@ -23,6 +23,8 @@ import { useToast } from '../../components/ui/Toast'
 import { ApiError, downloadFile } from '../../services/api'
 import { AssessmentForm } from '../assessments/AssessmentForm'
 import { MergeCandidatesDialog } from './MergeCandidatesDialog'
+import { RunScreeningDialog } from './RunScreeningDialog'
+import { EditProfileDialog } from './EditProfileDialog'
 import type { CandidateStatus } from '../../types'
 
 const STATUS_OPTIONS: CandidateStatus[] = ['NEW', 'ACTIVE', 'IN_PROCESS', 'HIRED', 'ARCHIVED']
@@ -57,6 +59,8 @@ export function CandidateDetailPage() {
   const [tab, setTab] = useState('profile')
   const [assessmentOpen, setAssessmentOpen] = useState(false)
   const [mergeOpen, setMergeOpen] = useState(false)
+  const [screeningOpen, setScreeningOpen] = useState(false)
+  const [editProfileOpen, setEditProfileOpen] = useState(false)
 
   const { data: candidate, isLoading, isError } = useCandidate(id)
   const { data: history } = useCandidateHistory(id)
@@ -147,6 +151,8 @@ export function CandidateDetailPage() {
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <StatusBadge status={candidate.status} />
                 <AiScoreBadge score={candidate.ai_score} />
+                {candidate.current_level && <ColorBadge name={candidate.current_level} color="#0ea5e9" />}
+                {candidate.primary_specialty && <ColorBadge name={candidate.primary_specialty} color="#8b5cf6" />}
                 {candidate.labels.map((l) => (
                   <ColorBadge key={l.id} name={l.name} color={l.color} />
                 ))}
@@ -193,6 +199,12 @@ export function CandidateDetailPage() {
                 </option>
               ))}
             </Select>
+            <Button variant="secondary" onClick={() => setScreeningOpen(true)}>
+              Run AI Screening
+            </Button>
+            <Button variant="secondary" onClick={() => setEditProfileOpen(true)}>
+              Edit profile
+            </Button>
             <Button variant="secondary" onClick={() => setMergeOpen(true)}>
               Merge duplicate
             </Button>
@@ -234,6 +246,34 @@ export function CandidateDetailPage() {
           <div>
             <div className="text-xs text-slate-400">Source</div>
             <div className="text-slate-700">{candidate.source}</div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-400">Portfolio</div>
+            <div className="text-slate-700">
+              {candidate.portfolio_url ? (
+                <a
+                  href={candidate.portfolio_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-brand-600 hover:underline"
+                >
+                  {candidate.portfolio_url}
+                </a>
+              ) : (
+                '—'
+              )}
+            </div>
+          </div>
+          <div>
+            <div className="text-xs text-slate-400">Expected salary</div>
+            <div className="text-slate-700">
+              {candidate.expected_salary_min != null || candidate.expected_salary_max != null
+                ? `${[candidate.expected_salary_min, candidate.expected_salary_max]
+                    .filter((v) => v != null)
+                    .map((v) => v!.toLocaleString())
+                    .join(' - ')} ${candidate.expected_salary_currency}`
+                : '—'}
+            </div>
           </div>
         </div>
       </Card>
@@ -388,10 +428,23 @@ export function CandidateDetailPage() {
             <CardHeader
               title="Screening Results"
               subtitle="AI-generated recommendation — recruiter makes the final decision"
+              action={
+                <Button size="sm" variant="secondary" onClick={() => setScreeningOpen(true)}>
+                  Run AI Screening
+                </Button>
+              }
             />
             <CardBody>
               {!screenings || screenings.length === 0 ? (
-                <EmptyState title="No screening results yet" description="Run 'Find Candidates' or 'Screen' from a job to generate one." />
+                <EmptyState
+                  title="No screening results yet"
+                  description="Click 'Run AI Screening' above and pick a job to compare this candidate against."
+                  action={
+                    <Button size="sm" onClick={() => setScreeningOpen(true)}>
+                      Run AI Screening
+                    </Button>
+                  }
+                />
               ) : (
                 <div className="space-y-4">
                   {screenings.map((s) => (
@@ -530,6 +583,13 @@ export function CandidateDetailPage() {
         targetId={candidate.id}
         targetName={candidate.full_name}
       />
+      <RunScreeningDialog
+        open={screeningOpen}
+        onClose={() => setScreeningOpen(false)}
+        candidateId={candidate.id}
+        candidateName={candidate.full_name}
+      />
+      <EditProfileDialog open={editProfileOpen} onClose={() => setEditProfileOpen(false)} candidate={candidate} />
     </div>
   )
 }

@@ -4,6 +4,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator, Field
 
+from app.models.enums import SeniorityLevel
+
 # A parsed CV's field lengths are inherently unbounded — a real-world CV can
 # put an entire paragraph where we expect a short "certification name" or
 # "school" (this has actually happened: a résumé section got misclassified
@@ -32,6 +34,50 @@ def _truncate_list(max_len: int):
 
     return validator
 
+
+_LEVEL_ALIASES = {
+    "intern": SeniorityLevel.INTERN,
+    "internship": SeniorityLevel.INTERN,
+    "fresher": SeniorityLevel.FRESHER,
+    "entry level": SeniorityLevel.FRESHER,
+    "entry-level": SeniorityLevel.FRESHER,
+    "junior": SeniorityLevel.JUNIOR,
+    "jr": SeniorityLevel.JUNIOR,
+    "mid": SeniorityLevel.MID,
+    "middle": SeniorityLevel.MID,
+    "mid-level": SeniorityLevel.MID,
+    "intermediate": SeniorityLevel.MID,
+    "senior": SeniorityLevel.SENIOR,
+    "sr": SeniorityLevel.SENIOR,
+    "lead": SeniorityLevel.LEAD,
+    "tech lead": SeniorityLevel.LEAD,
+    "team lead": SeniorityLevel.LEAD,
+    "principal": SeniorityLevel.LEAD,
+    "staff": SeniorityLevel.LEAD,
+    "manager": SeniorityLevel.MANAGER,
+    "head": SeniorityLevel.MANAGER,
+    "director": SeniorityLevel.DIRECTOR,
+    "vp": SeniorityLevel.DIRECTOR,
+    "vice president": SeniorityLevel.DIRECTOR,
+    "cto": SeniorityLevel.DIRECTOR,
+}
+
+
+def _coerce_seniority_level(v: object) -> object:
+    """Lenient string -> SeniorityLevel mapping so a slightly-off value from
+    an LLM's JSON (e.g. "Mid-level" instead of "MID") never blows up parsing
+    with a Pydantic ValidationError — it just falls back to None."""
+    if v is None or isinstance(v, SeniorityLevel):
+        return v
+    if isinstance(v, str):
+        key = v.strip().lower()
+        if key in (m.value.lower() for m in SeniorityLevel):
+            return key.upper()
+        return _LEVEL_ALIASES.get(key)
+    return None
+
+
+SeniorityLevelField = Annotated[SeniorityLevel | None, BeforeValidator(_coerce_seniority_level)]
 
 Text255 = Annotated[str, BeforeValidator(_truncate(255))]
 Text100 = Annotated[str, BeforeValidator(_truncate(100))]
@@ -84,6 +130,9 @@ class ParsedCV(BaseModel):
     current_title: OptionalText255 = None
     years_of_experience: float | None = None
     summary: str | None = None
+    portfolio_url: OptionalText500 = None
+    current_level: SeniorityLevelField = None
+    primary_specialty: OptionalText100 = None
     skills: SkillList = Field(default_factory=list)
     work_experience: list[ParsedExperience] = Field(default_factory=list)
     education: list[ParsedEducation] = Field(default_factory=list)

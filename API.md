@@ -56,6 +56,12 @@ List/search query params (both `GET /candidates` and `GET /search/candidates` ac
 | POST | `/jobs/{id}/screen` | `{job_id, candidate_ids?}` — AI-screen specific candidates, or all current applicants if omitted (RecruiterOrAdmin) |
 | POST | `/jobs/{id}/recommendations` | "Find candidates for this job" — ranked list with per-candidate explanation |
 
+Job fields also include `level`, `salary_min`/`salary_max`/`salary_currency`/`salary_negotiable`, `working_hours`, `benefits`, `hiring_reason`, `technical_skills`, `soft_skills`, and `age_min`/`age_max`/`gender_requirement`. The last three are **informational only** — recorded for internal/compliance purposes but never read by AI screening or recommendation scoring.
+
+Candidate profile fields also include `portfolio_url`, `current_level`, `primary_specialty` (all inferred from the CV where possible), and `expected_salary_min`/`expected_salary_max`/`expected_salary_currency` (usually set manually via `PATCH /candidates/{id}`, since CVs rarely state salary expectations).
+
+AI screening (`/jobs/{id}/screen`) and recommendations (`/jobs/{id}/recommendations`) both weigh: required/preferred skills, years of experience, seniority level, education, relevant certifications, language proficiency, location compatibility, and expected-salary-vs-budget fit. A dimension is only scored when both sides have data for it (e.g. an unscored expected salary doesn't penalize a candidate); weights are redistributed proportionally across whichever dimensions are present.
+
 ## Applications / Pipeline
 
 | Method | Path | Notes |

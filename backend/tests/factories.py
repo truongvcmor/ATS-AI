@@ -11,6 +11,8 @@ def make_cv_docx(
     skills: str = "Python, FastAPI, LangChain, RAG, LLM, PostgreSQL, Docker, AWS, Qdrant",
     title: str = "Senior Backend Engineer",
     company: str = "Tech Corp",
+    certifications: str | None = None,
+    languages: str | None = None,
 ) -> bytes:
     doc = docx.Document()
     doc.add_paragraph(full_name)
@@ -30,6 +32,14 @@ def make_cv_docx(
     doc.add_paragraph("")
     doc.add_paragraph("EDUCATION")
     doc.add_paragraph("Bachelor of Science, Ho Chi Minh City University of Technology (2014 - 2018)")
+    if certifications:
+        doc.add_paragraph("")
+        doc.add_paragraph("CERTIFICATIONS")
+        doc.add_paragraph(certifications)
+    if languages:
+        doc.add_paragraph("")
+        doc.add_paragraph("LANGUAGES")
+        doc.add_paragraph(languages)
 
     buf = io.BytesIO()
     doc.save(buf)

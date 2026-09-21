@@ -1,12 +1,12 @@
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Date, DateTime, Enum, Float, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
-from app.models.enums import CandidateStatus
+from app.models.enums import CandidateStatus, SalaryCurrency, SeniorityLevel
 
 
 class Candidate(Base):
@@ -22,6 +22,15 @@ class Candidate(Base):
     years_of_experience: Mapped[float | None] = mapped_column(Float, nullable=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     ai_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    portfolio_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # GitHub/GitLab/portfolio link
+    current_level: Mapped[SeniorityLevel | None] = mapped_column(Enum(SeniorityLevel, name="seniority_level"), nullable=True)
+    primary_specialty: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g. "Backend", "AI/ML"
+    expected_salary_min: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    expected_salary_max: Mapped[float | None] = mapped_column(Numeric(14, 2), nullable=True)
+    expected_salary_currency: Mapped[SalaryCurrency] = mapped_column(
+        Enum(SalaryCurrency, name="salary_currency"), default=SalaryCurrency.VND
+    )
     status: Mapped[CandidateStatus] = mapped_column(
         Enum(CandidateStatus, name="candidate_status"), default=CandidateStatus.NEW, nullable=False
     )

@@ -21,7 +21,17 @@ from app.services.search.service import candidate_document_text
 
 YEARS_RE = re.compile(r"(\d+)\+?\s*years?", re.IGNORECASE)
 
-WEIGHTS = {"keyword": 0.15, "semantic": 0.25, "skill": 0.30, "experience": 0.15, "screening": 0.15}
+WEIGHTS = {
+    "keyword": 0.10,
+    "semantic": 0.20,
+    "skill": 0.30,
+    "experience": 0.10,
+    "screening": 0.15,
+    "level": 0.10,
+    "location": 0.05,
+}
+
+LEVEL_ORDER = ["INTERN", "FRESHER", "JUNIOR", "MID", "SENIOR", "LEAD", "MANAGER", "DIRECTOR"]
 
 
 def _extract_skills(text: str) -> set[str]:
@@ -32,6 +42,33 @@ def _extract_skills(text: str) -> set[str]:
 def _required_years(text: str) -> float:
     m = YEARS_RE.search(text)
     return float(m.group(1)) if m else 0.0
+
+
+def _level_score(job_level: str | None, candidate_level: str | None) -> float | None:
+    if not job_level or not candidate_level:
+        return None
+    try:
+        job_idx = LEVEL_ORDER.index(job_level)
+        candidate_idx = LEVEL_ORDER.index(candidate_level)
+    except ValueError:
+        return None
+    diff = candidate_idx - job_idx
+    return 1.0 if diff >= 0 else max(0.0, 1.0 + diff * 0.25)
+
+
+def _location_score(job_location: str | None, candidate_location: str | None) -> float | None:
+    if not job_location or not candidate_location:
+        return None
+    job_loc, candidate_loc = job_location.strip().lower(), candidate_location.strip().lower()
+    if job_loc in candidate_loc or candidate_loc in job_loc or "remote" in job_loc:
+        return 1.0
+    return 0.3
+
+
+def _salary_fits(job: Job, candidate: Candidate) -> bool | None:
+    if job.salary_max is None or candidate.expected_salary_min is None:
+        return None
+    return float(candidate.expected_salary_min) <= float(job.salary_max)
 
 
 class RecommendationService:
@@ -86,22 +123,29 @@ class RecommendationService:
             raw_screening = screening_by_candidate.get(candidate.id)
             screening_score = (raw_screening / 100.0) if raw_screening is not None else None
 
-            weights = dict(WEIGHTS)
-            if screening_score is None:
-                dropped = weights.pop("screening")
-                total = sum(weights.values())
-                weights = {k: v + (v / total) * dropped for k, v in weights.items()}
-
-            final = (
-                keyword_score * weights["keyword"]
-                + semantic_score * weights["semantic"]
-                + skill_score * weights["skill"]
-                + experience_score * weights["experience"]
-                + (screening_score or 0.0) * weights.get("screening", 0.0)
+            level_score = _level_score(
+                job.level.value if job.level else None, candidate.current_level.value if candidate.current_level else None
             )
+            location_score = _location_score(job.location, candidate.location)
+
+            scored = {
+                "keyword": keyword_score,
+                "semantic": semantic_score,
+                "skill": skill_score,
+                "experience": experience_score,
+                "screening": screening_score,
+                "level": level_score,
+                "location": location_score,
+            }
+            weights = {k: v for k, v in WEIGHTS.items() if scored[k] is not None}
+            total_weight = sum(weights.values())
+            final = sum(scored[k] * (w / total_weight) for k, w in weights.items())
             final_score = round(final * 100, 1)
 
             explanation = self._explain(job.title, matched_skills, missing_skills, candidate.years_of_experience, final_score)
+            salary_fits = _salary_fits(job, candidate)
+            if salary_fits is False:
+                explanation += " Note: candidate's expected salary exceeds the job's budget."
 
             results.append(
                 CandidateRecommendation(
@@ -111,6 +155,8 @@ class RecommendationService:
                     semantic_score=round(semantic_score * 100, 1),
                     skill_match_score=round(skill_score * 100, 1),
                     experience_score=round(experience_score * 100, 1),
+                    level_score=round(level_score * 100, 1) if level_score is not None else None,
+                    location_score=round(location_score * 100, 1) if location_score is not None else None,
                     screening_score=raw_screening,
                     matched_skills=matched_skills,
                     missing_skills=missing_skills,

@@ -20,6 +20,20 @@ export type EmploymentType = 'FULL_TIME' | 'PART_TIME' | 'CONTRACT' | 'INTERNSHI
 
 export type JobStatus = 'DRAFT' | 'OPEN' | 'PAUSED' | 'CLOSED'
 
+export type SeniorityLevel =
+  | 'INTERN'
+  | 'FRESHER'
+  | 'JUNIOR'
+  | 'MID'
+  | 'SENIOR'
+  | 'LEAD'
+  | 'MANAGER'
+  | 'DIRECTOR'
+
+export type SalaryCurrency = 'VND' | 'USD'
+
+export type GenderRequirement = 'ANY' | 'MALE' | 'FEMALE'
+
 export type SortBy = 'relevance' | 'ai_score' | 'experience' | 'recently_added' | 'recently_updated'
 
 // ---- Auth ----
@@ -66,6 +80,8 @@ export interface CandidateListItem {
   status: CandidateStatus
   skills: string[]
   labels: LabelBadge[]
+  current_level: SeniorityLevel | null
+  primary_specialty: string | null
   updated_at: string
   created_at: string
   relevance_score?: number
@@ -123,6 +139,10 @@ export interface CandidateDetail extends CandidateListItem {
   phone: string | null
   summary: string | null
   source: string
+  portfolio_url: string | null
+  expected_salary_min: number | null
+  expected_salary_max: number | null
+  expected_salary_currency: SalaryCurrency
   experiences: ExperienceOut[]
   educations: EducationOut[]
   certifications: CertificationOut[]
@@ -140,6 +160,12 @@ export interface CandidateUpdate {
   years_of_experience?: number
   summary?: string
   status?: CandidateStatus
+  portfolio_url?: string
+  current_level?: SeniorityLevel
+  primary_specialty?: string
+  expected_salary_min?: number
+  expected_salary_max?: number
+  expected_salary_currency?: SalaryCurrency
 }
 
 export interface PaginatedCandidates {
@@ -238,10 +264,23 @@ export interface JobOut {
   department: string | null
   location: string | null
   employment_type: EmploymentType
+  level: SeniorityLevel | null
+  salary_min: number | null
+  salary_max: number | null
+  salary_currency: SalaryCurrency
+  salary_negotiable: boolean
+  working_hours: string | null
+  benefits: string | null
+  hiring_reason: string | null
+  age_min: number | null
+  age_max: number | null
+  gender_requirement: GenderRequirement
   description: string | null
   responsibilities: string | null
   requirements: string | null
   preferred_requirements: string | null
+  technical_skills: string | null
+  soft_skills: string | null
   status: JobStatus
   created_at: string
   updated_at: string
@@ -253,10 +292,23 @@ export interface JobCreate {
   department?: string | null
   location?: string | null
   employment_type?: EmploymentType
+  level?: SeniorityLevel | null
+  salary_min?: number | null
+  salary_max?: number | null
+  salary_currency?: SalaryCurrency
+  salary_negotiable?: boolean
+  working_hours?: string | null
+  benefits?: string | null
+  hiring_reason?: string | null
+  age_min?: number | null
+  age_max?: number | null
+  gender_requirement?: GenderRequirement
   description?: string | null
   responsibilities?: string | null
   requirements?: string | null
   preferred_requirements?: string | null
+  technical_skills?: string | null
+  soft_skills?: string | null
   status?: JobStatus
 }
 
@@ -299,6 +351,8 @@ export interface CandidateRecommendation {
   semantic_score: number
   skill_match_score: number
   experience_score: number
+  level_score: number | null
+  location_score: number | null
   screening_score: number | null
   matched_skills: string[]
   missing_skills: string[]

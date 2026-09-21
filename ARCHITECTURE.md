@@ -141,10 +141,12 @@ This whole mechanism is single-process by design (see README's "Scaling constrai
 ### Screening
 
 `ScreeningService.screen(db, job, candidate)`:
-1. Builds a prompt from `app/prompts/screening.py` (explicitly instructs the model to ignore protected attributes).
+1. Builds a prompt from `app/prompts/screening.py` (explicitly instructs the model to ignore protected attributes) covering: required/preferred skills & tech stack, years of experience, seniority level, education, certifications, language proficiency, location, and expected-salary-vs-budget fit.
 2. Calls `LLMService.complete(...)`.
 3. Parses the response as JSON and validates it against `ScreeningLLMOutput` (Pydantic) — retries (LLM call + reparse) up to 2 extra times on invalid JSON/schema before raising.
 4. Persists a `ScreeningResult`, updates `candidate.ai_score`, and logs an `AI_SCREENING` activity.
+
+`MockLLMService._screen` implements this as a weighted average (skills 40%, preferred-skill bonus 5%, experience 15%, level 15%, location 10%, language 10%, certification 5%) — a dimension is dropped from the average, and the remaining weights renormalized, whenever the job or candidate has no data for it (e.g. no level specified on either side), so missing data never drags the score down. Salary is deliberately excluded from the weighted score — an unset expected salary shouldn't penalize a candidate — and instead surfaces as a strength/concern sentence when both a job budget and a candidate expectation exist.
 
 ### Search
 
@@ -157,7 +159,7 @@ Filters (skills/location/labels/experience/AI score) are pushed down into SQL; t
 
 ### Recommendations ("Find candidates for this job")
 
-`RecommendationService.find_candidates_for_job` combines, per candidate: keyword relevance against the job text, semantic similarity (embeddings), required/preferred skill match ratio, years-of-experience ratio, and the latest AI screening score for that job (if one exists) — weighted and normalized to 0-100, with a human-readable explanation generated through the same `LLMService` abstraction (`app/prompts/explanation.py`).
+`RecommendationService.find_candidates_for_job` combines, per candidate: keyword relevance against the job text, semantic similarity (embeddings), required/preferred skill match ratio, years-of-experience ratio, seniority-level match, location match, and the latest AI screening score for that job (if one exists) — weighted and normalized to 0-100 (weights renormalized over whichever dimensions have data, same principle as the mock screener above), with a human-readable explanation generated through the same `LLMService` abstraction (`app/prompts/explanation.py`) plus a salary-budget note when the candidate's expected salary exceeds the job's max.
 
 ## Security
 

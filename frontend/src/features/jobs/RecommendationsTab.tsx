@@ -88,6 +88,9 @@ function RecommendationRow({
             <ScoreBar label="Semantic" value={rec.semantic_score} />
             <ScoreBar label="Skills" value={rec.skill_match_score} />
             <ScoreBar label="Experience" value={rec.experience_score} />
+            {rec.level_score != null && <ScoreBar label="Level" value={rec.level_score} />}
+            {rec.location_score != null && <ScoreBar label="Location" value={rec.location_score} />}
+            {rec.screening_score != null && <ScoreBar label="Screening" value={rec.screening_score} />}
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>

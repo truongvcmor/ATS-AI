@@ -1,7 +1,22 @@
 import os
 import uuid
 
-os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://ats:ats@localhost:5433/ats_test")
+# Force the test database regardless of what's already in the environment.
+# `setdefault` used to be used here, but inside the app's own Docker
+# container DATABASE_URL is already set (by docker-compose, to the real
+# `ats` database) — so `setdefault` was a no-op and every test run was
+# silently drop_all()-ing and TRUNCATE-ing the actual application database
+# instead of an isolated `ats_test` one. This must always win.
+#
+# Derive the test URL from whatever DATABASE_URL is already set to (same
+# host/port/credentials, database name swapped for "ats_test") so this works
+# unchanged both on a host dev box (localhost:5433) and inside the backend
+# container (postgres:5432) — an explicit TEST_DATABASE_URL always wins.
+_ambient_database_url = os.environ.get("DATABASE_URL", "postgresql+psycopg2://ats:ats@localhost:5433/ats")
+_TEST_DATABASE_URL = os.environ.get(
+    "TEST_DATABASE_URL", _ambient_database_url.rsplit("/", 1)[0] + "/ats_test"
+)
+os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
 # The whole suite shares one process/IP against the login rate limiter (many
 # fixtures log in fresh per test) — raise the ceiling so tests never trip it.
 os.environ.setdefault("LOGIN_RATE_LIMIT_MAX_ATTEMPTS", "100000")
@@ -15,6 +30,20 @@ from app.core.database import Base, get_db
 from app.core.config import settings
 from app.main import app
 from app.models import *  # noqa: F401,F403 register all tables on Base.metadata
+
+
+def _assert_test_database(db_name: str) -> None:
+    """Last-resort safety net: refuse to run destructive setup/teardown
+    against anything that isn't obviously a test database. This suite used
+    to drop_all()/TRUNCATE the real `ats` database in Docker because
+    DATABASE_URL was already set there — never again on a name this doesn't
+    recognize as disposable."""
+    if "test" not in db_name.lower():
+        raise RuntimeError(
+            f"Refusing to run destructive test setup against database {db_name!r} — it doesn't look like "
+            "a test database (expected 'test' in the name). Set TEST_DATABASE_URL explicitly if this is "
+            "intentional."
+        )
 
 
 def _admin_database_url() -> str:
@@ -33,6 +62,7 @@ def _ensure_test_database() -> None:
 
 @pytest.fixture(scope="session", autouse=True)
 def _setup_database():
+    _assert_test_database(settings.DATABASE_URL.rsplit("/", 1)[1])
     _ensure_test_database()
     engine = create_engine(settings.DATABASE_URL)
     with engine.connect() as conn:
@@ -46,6 +76,7 @@ def _setup_database():
 
 @pytest.fixture(autouse=True)
 def _clean_tables():
+    _assert_test_database(settings.DATABASE_URL.rsplit("/", 1)[1])
     engine = create_engine(settings.DATABASE_URL)
     table_names = [t.name for t in reversed(Base.metadata.sorted_tables)]
     with engine.connect() as conn:

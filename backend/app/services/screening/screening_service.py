@@ -35,6 +35,22 @@ def _experience_lines(candidate: Candidate) -> list[str]:
     return lines
 
 
+def _education_lines(candidate: Candidate) -> list[str]:
+    lines = []
+    for edu in candidate.educations:
+        period = f"{edu.start_date or '?'} - {edu.end_date or '?'}"
+        lines.append(f"- {edu.degree or 'Degree'} at {edu.school} ({period})".strip())
+    return lines
+
+
+def _language_entries(candidate: Candidate) -> list[str]:
+    return [f"{lang.name} ({lang.proficiency})" if lang.proficiency else lang.name for lang in candidate.languages]
+
+
+def _certification_names(candidate: Candidate) -> list[str]:
+    return [cert.name for cert in candidate.certifications]
+
+
 class ScreeningService:
     def __init__(self, llm_service: LLMService) -> None:
         self._llm = llm_service
@@ -49,6 +65,21 @@ class ScreeningService:
             candidate_skills=[cs.skill.name for cs in candidate.skills],
             candidate_summary=candidate.summary,
             candidate_experience_lines=_experience_lines(candidate),
+            job_level=job.level.value if job.level else None,
+            job_location=job.location,
+            job_technical_skills=job.technical_skills,
+            job_soft_skills=job.soft_skills,
+            job_salary_min=float(job.salary_min) if job.salary_min is not None else None,
+            job_salary_max=float(job.salary_max) if job.salary_max is not None else None,
+            job_salary_currency=job.salary_currency.value if job.salary_currency else None,
+            candidate_level=candidate.current_level.value if candidate.current_level else None,
+            candidate_location=candidate.location,
+            candidate_education_lines=_education_lines(candidate),
+            candidate_certifications=_certification_names(candidate),
+            candidate_languages=_language_entries(candidate),
+            candidate_expected_salary_min=float(candidate.expected_salary_min) if candidate.expected_salary_min is not None else None,
+            candidate_expected_salary_max=float(candidate.expected_salary_max) if candidate.expected_salary_max is not None else None,
+            candidate_expected_salary_currency=candidate.expected_salary_currency.value if candidate.expected_salary_currency else None,
         )
         last_error: Exception | None = None
         for attempt in range(1, MAX_RETRIES + 2):

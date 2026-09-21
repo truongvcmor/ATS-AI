@@ -11,13 +11,49 @@ from app.services.cv_parser.base import (
     ParsedLanguage,
     ParsedProject,
 )
-from app.services.cv_parser.skills_vocab import SKILLS_VOCAB_LOWER, skill_pattern
+from app.models.enums import SeniorityLevel
+from app.services.cv_parser.skills_vocab import SKILLS_VOCAB_LOWER, SPECIALTY_CATEGORIES, SKILL_CATEGORIES, skill_pattern
 from app.utils.text_normalize import normalize_whitespace
 
 logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
 PHONE_RE = re.compile(r"(\+?\d{1,3}[\s.-]?)?(\(?\d{2,4}\)?[\s.-]?){2,4}\d{2,4}")
+# GitHub/GitLab profile links, or a URL on a line explicitly labeled
+# portfolio/website — deliberately not "any URL" (that would grab a LinkedIn
+# ad link, a company's own website mentioned in an old job, etc.).
+PORTFOLIO_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?(?:github\.com|gitlab\.com)/[A-Za-z0-9_.-]+/?|"
+    r"(?:portfolio|website|personal\s*site)\s*[:\-]\s*(?P<labeled>\S+)",
+    re.IGNORECASE,
+)
+
+LEVEL_KEYWORDS: list[tuple[str, SeniorityLevel]] = [
+    (r"\bintern(ship)?\b", SeniorityLevel.INTERN),
+    (r"\bfresher\b|\bentry[\s-]?level\b", SeniorityLevel.FRESHER),
+    (r"\bjunior\b|\bjr\.?\b", SeniorityLevel.JUNIOR),
+    (r"\bmid(dle)?[\s-]?level\b|\bintermediate\b", SeniorityLevel.MID),
+    (r"\bsenior\b|\bsr\.?\b", SeniorityLevel.SENIOR),
+    (r"\btech(nical)?\s+lead\b|\bteam\s+lead\b|\bprincipal\b|\bstaff\b|\blead\b", SeniorityLevel.LEAD),
+    (r"\bdirector\b|\bvp\b|\bvice\s+president\b|\bcto\b|\bchief\b", SeniorityLevel.DIRECTOR),
+    (r"\bmanager\b|\bhead\s+of\b", SeniorityLevel.MANAGER),
+]
+
+# Checked against the candidate's own stated title before falling back to
+# skill-count voting (see _guess_primary_specialty) — a title is a much more
+# confident signal than "has both Python and Docker on their skill list",
+# which ties equally plausibly between Backend and DevOps.
+TITLE_SPECIALTY_KEYWORDS: list[tuple[str, str]] = [
+    (r"\bdevops\b|\bsite\s+reliability\b|\bsre\b|\binfrastructure\b|\bplatform\s+engineer\b", "DevOps/Infrastructure"),
+    (r"\bmachine\s+learning\b|\bML\b|\bAI\b|\bdata\s+scientist\b|\bdata\s+engineer\b|\bnlp\b|\bcomputer\s+vision\b", "AI/ML & Data"),
+    (r"\bfront[\s-]?end\b|\bui\s+developer\b", "Frontend"),
+    (r"\bmobile\b|\bios\b|\bandroid\b|\bflutter\b", "Mobile"),
+    (r"\bback[\s-]?end\b", "Backend"),
+    (r"\bqa\b|\bquality\s+assurance\b|\btest(er|ing)?\s+engineer\b", "QA/Testing"),
+    (r"\bhr\b|\bhuman\s+resources\b|\brecruit(er|ing|ment)?\b|\btalent\s+acquisition\b", "HR"),
+    (r"\bmarketing\b", "Marketing"),
+    (r"\bsales\b|\bbusiness\s+development\b", "Sales"),
+]
 YEARS_EXP_RE = re.compile(r"(\d+(?:\.\d+)?)\+?\s*years?\s*(?:of)?\s*experience", re.IGNORECASE)
 
 # Common bullet glyphs across Word/PowerPoint/PDF exports — stripped from the
@@ -233,6 +269,62 @@ def _guess_location(header_text: str, full_text: str) -> str | None:
     if m:
         return normalize_whitespace(m.group(1))[:255]
     return None
+
+
+def _extract_portfolio_url(full_text: str) -> str | None:
+    m = PORTFOLIO_URL_RE.search(full_text)
+    if not m:
+        return None
+    url = m.group("labeled") or m.group(0)
+    url = url.strip().rstrip(".,;)")
+    if not url:
+        return None
+    if not url.lower().startswith(("http://", "https://")):
+        url = f"https://{url}"
+    return url
+
+
+def _guess_current_level(current_title: str | None, full_text: str) -> SeniorityLevel | None:
+    # Prefer the candidate's own stated title (e.g. "Senior Backend Engineer")
+    # over a level word appearing incidentally elsewhere in the document
+    # (a past employer's job ad, a mentioned colleague's title, etc.).
+    for haystack in (current_title or "", full_text):
+        if not haystack:
+            continue
+        for pattern, level in LEVEL_KEYWORDS:
+            if re.search(pattern, haystack, re.IGNORECASE):
+                return level
+    return None
+
+
+def _guess_primary_specialty(current_title: str | None, skills: list[str]) -> str | None:
+    """Best-effort category guess — e.g. mostly Python/FastAPI/PostgreSQL
+    skills -> "Backend". Recruiter-editable; this is a starting point, not a
+    claim of certainty.
+
+    1) The candidate's own title is checked first — a stated "DevOps
+       Engineer" title is a far more confident signal than skill counting,
+       which would otherwise tie between Backend and DevOps for someone who
+       simply lists Python *and* Docker/Kubernetes/AWS (a common, not
+       remotely unusual combination for a backend engineer).
+    2) Falls back to counting categorized skills; ties are broken by
+       SPECIALTY_CATEGORIES' declared order (core dev disciplines listed
+       before supporting/infra ones) rather than giving up with None.
+    """
+    if current_title:
+        for pattern, category in TITLE_SPECIALTY_KEYWORDS:
+            if re.search(pattern, current_title, re.IGNORECASE):
+                return category
+
+    skill_set = {s.lower() for s in skills}
+    counts = {
+        category: sum(1 for skill in SKILL_CATEGORIES[category] if skill.lower() in skill_set)
+        for category in SPECIALTY_CATEGORIES
+    }
+    best_count = max(counts.values())
+    if best_count == 0:
+        return None
+    return next(category for category in SPECIALTY_CATEGORIES if counts[category] == best_count)
 
 
 def _extract_skills(skills_lines: list[str], full_text: str) -> list[str]:
@@ -451,15 +543,20 @@ class RuleBasedCVParser(CVParser):
         phone_match = _find_phone(text)
 
         experiences = _parse_experience(sections.get("experience", []))
+        current_title = experiences[0].position if experiences else None
+        skills = _extract_skills(sections.get("skills", []), text)
 
         parsed = ParsedCV(
             full_name=_guess_name(sections.get("header", []), text),
             email=email_match.group(0) if email_match else None,
             phone=normalize_whitespace(phone_match) if phone_match else None,
             location=_guess_location(" ".join(sections.get("header", [])), text),
-            current_title=experiences[0].position if experiences else None,
+            current_title=current_title,
             summary=normalize_whitespace(" ".join(sections.get("summary", []))) or None,
-            skills=_extract_skills(sections.get("skills", []), text),
+            portfolio_url=_extract_portfolio_url(text),
+            current_level=_guess_current_level(current_title, text),
+            primary_specialty=_guess_primary_specialty(current_title, skills),
+            skills=skills,
             work_experience=experiences,
             education=_parse_education(sections.get("education", [])),
             certifications=_parse_certifications(sections.get("certifications", [])),

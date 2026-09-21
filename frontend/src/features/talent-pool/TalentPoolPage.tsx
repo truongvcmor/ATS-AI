@@ -218,6 +218,7 @@ export function TalentPoolPage() {
                 <tr>
                   <Th>Name</Th>
                   <Th>Title</Th>
+                  <Th>Level</Th>
                   <Th>Experience</Th>
                   <Th>Skills</Th>
                   <Th>Location</Th>
@@ -231,7 +232,11 @@ export function TalentPoolPage() {
                 {data.items.map((c) => (
                   <Tr key={c.id} onClick={() => navigate(`/candidates/${c.id}`)}>
                     <Td className="font-medium text-slate-900">{c.full_name}</Td>
-                    <Td>{c.current_title ?? '—'}</Td>
+                    <Td>
+                      <div>{c.current_title ?? '—'}</div>
+                      {c.primary_specialty && <div className="text-xs text-slate-400">{c.primary_specialty}</div>}
+                    </Td>
+                    <Td>{c.current_level ?? '—'}</Td>
                     <Td>{c.years_of_experience !== null ? `${c.years_of_experience} yrs` : '—'}</Td>
                     <Td className="max-w-[220px]">
                       <div className="flex flex-wrap gap-1">

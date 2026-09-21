@@ -83,6 +83,71 @@ def test_screening_scores_weak_match_candidate_lower(client, auth_headers):
     assert result["recommendation"] in ("WEAK_MATCH", "POSSIBLE_MATCH")
 
 
+def test_screening_weighs_level_location_language_certification_and_salary(client, auth_headers):
+    # The recruitment department's Section-4 requirement: match evaluation
+    # must also consider level, location, language, relevant certifications,
+    # and salary compatibility — not just skills/experience.
+    job = client.post(
+        "/api/jobs",
+        headers=auth_headers,
+        json={
+            "title": "Senior Backend Engineer",
+            "location": "Ho Chi Minh City",
+            "level": "SENIOR",
+            "salary_min": 2000,
+            "salary_max": 3000,
+            "salary_currency": "USD",
+            "requirements": "5+ years experience\nStrong Python\nExperience with FastAPI\nEnglish required\nRelevant certification required",
+            "status": "OPEN",
+        },
+    ).json()
+
+    strong_cv = make_cv_docx(
+        "Level Match Candidate",
+        "levelmatch@example.com",
+        "0966666666",
+        location="Ho Chi Minh City",
+        skills="Python, FastAPI, PostgreSQL",
+        title="Senior Backend Engineer",
+        certifications="AWS Certified Developer",
+        languages="English (Fluent)",
+    )
+    strong = _upload_and_wait(client, auth_headers, strong_cv, filename="level_match.docx")
+    strong_id = strong["candidate_id"]
+    client.patch(
+        f"/api/candidates/{strong_id}",
+        headers=auth_headers,
+        json={"expected_salary_min": 2200, "expected_salary_max": 2500, "expected_salary_currency": "USD"},
+    )
+
+    weak_cv = make_cv_docx(
+        "Level Mismatch Candidate",
+        "levelmismatch@example.com",
+        "0977777777",
+        location="Hanoi",
+        skills="Python, FastAPI, PostgreSQL",
+        title="Junior Backend Engineer",
+    )
+    weak = _upload_and_wait(client, auth_headers, weak_cv, filename="level_mismatch.docx")
+    weak_id = weak["candidate_id"]
+    client.patch(
+        f"/api/candidates/{weak_id}",
+        headers=auth_headers,
+        json={"expected_salary_min": 5000, "expected_salary_max": 6000, "expected_salary_currency": "USD"},
+    )
+
+    strong_result = client.post(
+        f"/api/jobs/{job['id']}/screen", headers=auth_headers, json={"job_id": job["id"], "candidate_ids": [strong_id]}
+    ).json()[0]
+    weak_result = client.post(
+        f"/api/jobs/{job['id']}/screen", headers=auth_headers, json={"job_id": job["id"], "candidate_ids": [weak_id]}
+    ).json()[0]
+
+    assert strong_result["overall_score"] > weak_result["overall_score"]
+    assert any("salary" in c.lower() for c in weak_result["concerns"])
+    assert any("level" in c.lower() for c in weak_result["concerns"])
+
+
 def test_recommendations_ranks_matching_candidate_first(client, auth_headers):
     job = client.post("/api/jobs", headers=auth_headers, json=JOB_PAYLOAD).json()
     strong = _upload_and_wait(

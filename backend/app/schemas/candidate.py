@@ -3,7 +3,7 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
-from app.models.enums import CandidateStatus
+from app.models.enums import CandidateStatus, SalaryCurrency, SeniorityLevel
 
 
 class ExperienceOut(BaseModel):
@@ -78,6 +78,8 @@ class CandidateListItem(BaseModel):
     status: CandidateStatus
     skills: list[str] = []
     labels: list[LabelBadge] = []
+    current_level: SeniorityLevel | None = None
+    primary_specialty: str | None = None
     updated_at: datetime
     created_at: datetime
 
@@ -86,6 +88,10 @@ class CandidateDetail(CandidateListItem):
     phone: str | None = None
     summary: str | None = None
     source: str
+    portfolio_url: str | None = None
+    expected_salary_min: float | None = None
+    expected_salary_max: float | None = None
+    expected_salary_currency: SalaryCurrency
     experiences: list[ExperienceOut] = []
     educations: list[EducationOut] = []
     certifications: list[CertificationOut] = []
@@ -103,6 +109,12 @@ class CandidateUpdate(BaseModel):
     years_of_experience: float | None = None
     summary: str | None = None
     status: CandidateStatus | None = None
+    portfolio_url: str | None = None
+    current_level: SeniorityLevel | None = None
+    primary_specialty: str | None = None
+    expected_salary_min: float | None = None
+    expected_salary_max: float | None = None
+    expected_salary_currency: SalaryCurrency | None = None
 
 
 class DuplicateCandidateInfo(BaseModel):

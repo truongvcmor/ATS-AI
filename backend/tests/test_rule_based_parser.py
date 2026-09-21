@@ -7,7 +7,13 @@ and running it through the upload pipeline — see the fix in
 app/services/cv_parser/rule_based.py (_merge_wrapped_parens, _group_entries).
 """
 
-from app.services.cv_parser.rule_based import RuleBasedCVParser, _group_entries, _merge_wrapped_parens
+from app.models.enums import SeniorityLevel
+from app.services.cv_parser.rule_based import (
+    RuleBasedCVParser,
+    _group_entries,
+    _guess_primary_specialty,
+    _merge_wrapped_parens,
+)
 
 # Captured verbatim from `SELECT raw_text FROM candidate_cvs` after uploading
 # a real LibreOffice-generated PDF — no blank lines, and the education date
@@ -186,3 +192,64 @@ def test_vietnamese_section_headers_are_recognized():
     assert "Python" in parsed.skills
     assert len(parsed.work_experience) == 1
     assert parsed.work_experience[0].company == "ACME Corp"
+
+
+def test_extracts_github_portfolio_url():
+    raw_text = "John Doe\njohn@example.com\nGitHub: github.com/johndoe\nSKILLS\nPython\n"
+    parsed = RuleBasedCVParser().parse(raw_text)
+    assert parsed.portfolio_url == "https://github.com/johndoe"
+
+
+def test_extracts_labeled_portfolio_url():
+    raw_text = "John Doe\njohn@example.com\nPortfolio: johndoe.dev\nSKILLS\nPython\n"
+    parsed = RuleBasedCVParser().parse(raw_text)
+    assert parsed.portfolio_url == "https://johndoe.dev"
+
+
+def test_no_portfolio_url_when_absent():
+    parsed = RuleBasedCVParser().parse("John Doe\njohn@example.com\nSKILLS\nPython\n")
+    assert parsed.portfolio_url is None
+
+
+def test_infers_current_level_from_title():
+    raw_text = (
+        "John Doe\njohn@example.com\nWORK EXPERIENCE\n"
+        "Senior Backend Engineer at Acme (Jan 2021 - Present)\nBuilt things.\n"
+    )
+    parsed = RuleBasedCVParser().parse(raw_text)
+    assert parsed.current_level == SeniorityLevel.SENIOR
+
+
+def test_infers_junior_level_from_title():
+    raw_text = (
+        "John Doe\njohn@example.com\nWORK EXPERIENCE\n"
+        "Junior Developer at Acme (Jan 2021 - Present)\nBuilt things.\n"
+    )
+    parsed = RuleBasedCVParser().parse(raw_text)
+    assert parsed.current_level == SeniorityLevel.JUNIOR
+
+
+def test_primary_specialty_uses_title_over_tied_skills():
+    # Python/FastAPI/PostgreSQL (Backend) vs Docker/AWS/Kubernetes (DevOps)
+    # is an exact 3-3 tie by skill count alone — a common, unremarkable
+    # combination for a backend engineer who also knows the cloud basics.
+    # The title should resolve this confidently rather than guessing.
+    specialty = _guess_primary_specialty(
+        "DevOps Engineer", ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "Kubernetes"]
+    )
+    assert specialty == "DevOps/Infrastructure"
+
+    specialty = _guess_primary_specialty(
+        "Senior Backend Engineer", ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "Kubernetes"]
+    )
+    assert specialty == "Backend"
+
+
+def test_primary_specialty_falls_back_to_skill_voting_without_title_match():
+    specialty = _guess_primary_specialty(None, ["Python", "FastAPI", "PostgreSQL", "Django"])
+    assert specialty == "Backend"
+
+
+def test_primary_specialty_none_without_any_categorized_skills():
+    assert _guess_primary_specialty(None, []) is None
+    assert _guess_primary_specialty("Some Random Title", ["Some Unlisted Tool"]) is None

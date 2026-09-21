@@ -36,6 +36,13 @@ function Section({ title, content }: { title: string; content: string | null }) 
   )
 }
 
+function formatSalary(min: number | null, max: number | null, currency: string, negotiable: boolean): string | null {
+  if (min == null && max == null) return negotiable ? 'Negotiable' : null
+  const fmt = (n: number) => n.toLocaleString()
+  const range = min != null && max != null ? `${fmt(min)} - ${fmt(max)} ${currency}` : `${fmt((min ?? max)!)} ${currency}`
+  return negotiable ? `${range} (negotiable)` : range
+}
+
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -98,8 +105,15 @@ export function JobDetailPage() {
               <Badge tone={jobStatusTone[job.status] ?? 'slate'}>{job.status}</Badge>
             </div>
             <p className="mt-1 text-sm text-slate-500">
-              {[job.department, job.location, job.employment_type.replace('_', ' ')].filter(Boolean).join(' · ')}
+              {[job.department, job.location, job.employment_type.replace('_', ' '), job.level]
+                .filter(Boolean)
+                .join(' · ')}
             </p>
+            {formatSalary(job.salary_min, job.salary_max, job.salary_currency, job.salary_negotiable) && (
+              <p className="mt-1 text-sm font-medium text-slate-700">
+                {formatSalary(job.salary_min, job.salary_max, job.salary_currency, job.salary_negotiable)}
+              </p>
+            )}
             <p className="mt-1 text-xs text-slate-400">{job.application_count} applicant(s)</p>
           </div>
           <div className="flex gap-2">
@@ -123,12 +137,38 @@ export function JobDetailPage() {
           <CardHeader title="Overview" />
           <CardBody className="space-y-4">
             <Section title="Description" content={job.description} />
+            <Section title="Hiring reason" content={job.hiring_reason} />
             <Section title="Responsibilities" content={job.responsibilities} />
-            <Section title="Requirements" content={job.requirements} />
-            <Section title="Preferred requirements" content={job.preferred_requirements} />
-            {!job.description && !job.responsibilities && !job.requirements && !job.preferred_requirements && (
-              <EmptyState title="No details added yet" description="Click Edit to add a description and requirements." />
+            <Section title="Requirements (mandatory)" content={job.requirements} />
+            <Section title="Preferred requirements (nice-to-have)" content={job.preferred_requirements} />
+            <Section title="Technical skills" content={job.technical_skills} />
+            <Section title="Soft skills" content={job.soft_skills} />
+            <Section title="Working hours" content={job.working_hours} />
+            <Section title="Benefits" content={job.benefits} />
+            {(job.age_min || job.age_max || job.gender_requirement !== 'ANY') && (
+              <div>
+                <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                  Age / gender (informational only)
+                </h4>
+                <p className="mt-1 text-sm text-slate-700">
+                  {[
+                    job.age_min || job.age_max ? `Age ${job.age_min ?? '?'}-${job.age_max ?? '?'}` : null,
+                    job.gender_requirement !== 'ANY' ? job.gender_requirement : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </p>
+                <p className="mt-1 text-xs text-slate-400">Never used by AI screening or recommendations.</p>
+              </div>
             )}
+            {!job.description &&
+              !job.responsibilities &&
+              !job.requirements &&
+              !job.preferred_requirements &&
+              !job.technical_skills &&
+              !job.soft_skills && (
+                <EmptyState title="No details added yet" description="Click Edit to add a description and requirements." />
+              )}
           </CardBody>
         </Card>
       )}

@@ -103,6 +103,9 @@ def create_candidate_from_parsed(db: Session, parsed: ParsedCV, source: str = "u
         current_title=parsed.current_title,
         years_of_experience=parsed.years_of_experience,
         summary=parsed.summary,
+        portfolio_url=parsed.portfolio_url,
+        current_level=parsed.current_level,
+        primary_specialty=parsed.primary_specialty,
         source=source,
     )
     db.add(candidate)

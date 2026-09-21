@@ -22,7 +22,7 @@ def test_upload_rejects_content_that_does_not_match_its_extension(client, auth_h
 
 
 def test_upload_requires_recruiter_or_admin_role(client):
-    email = "viewer@ats.com"
+    email = "viewer-role-test@example.com"
     client.post(
         "/api/auth/register",
         json={"email": email, "password": "password123", "full_name": "Viewer", "role": "HIRING_MANAGER"},
